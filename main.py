@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 app = FastAPI()
 
-# 允许跨域请求
+# 开启跨域支持，允许前端网页 fetch 数据进行预览
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,6 +31,7 @@ def fetch_team_ics(team_id: str, team_name: str):
         print(f"抓取失败: {e}")
         return None
 
+    # 初始化 ICS 文件头 (符合 RFC 5545 规范)
     ics_content = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -38,7 +39,7 @@ def fetch_team_ics(team_id: str, team_name: str):
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{team_name}赛程",
-        f"X-WR-CALDESC:{team_name}最新赛程及比分同步工具",
+        f"X-WR-CALDESC:{team_name}最新赛程同步工具",
         "X-WR-TIMEZONE:Asia/Shanghai",
         "X-PUBLISHED-TTL:PT12H",
         "REFRESH-INTERVAL;VALUE=DURATION:PT12H",
@@ -66,8 +67,8 @@ def fetch_team_ics(team_id: str, team_name: str):
             f"DTSTAMP:{dt_stamp}",
             f"DTSTART;TZID=Asia/Shanghai:{datetime.now().strftime('%Y%m%dT%H%M00')}",
             f"DTEND;TZID=Asia/Shanghai:{(datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M00')}",
-            f"SUMMARY:暂无赛程更新 (系统占位)",
-            f"DESCRIPTION:目前数据源中暂无该球队最新赛程，请耐心等待同步。",
+            f"SUMMARY:【系统消息】赛程待更新",
+            f"DESCRIPTION:目前数据源中暂无该球队最新赛程，系统将持续监测更新。",
             "END:VEVENT"
         ])
     else:
@@ -82,6 +83,7 @@ def fetch_team_ics(team_id: str, team_name: str):
                 date_str = date_node.text.strip()
                 if len(date_str) < 11: continue
                     
+                # 跨年逻辑：根据当前月份推算 2026 赛季年份
                 m_month = int(date_str.split('-')[0])
                 m_year = current_year
                 if current_month > 10 and m_month < 6: m_year = current_year + 1
@@ -102,13 +104,12 @@ def fetch_team_ics(team_id: str, team_name: str):
                     f"DTSTART;TZID=Asia/Shanghai:{start_dt.strftime('%Y%m%dT%H%M00')}",
                     f"DTEND;TZID=Asia/Shanghai:{end_dt.strftime('%Y%m%dT%H%M00')}",
                     f"SUMMARY:{home_team} vs {away_team} ({round_name})",
-                    f"DESCRIPTION:赛事类型: {round_name}\\n数据同步时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    f"DESCRIPTION:赛事: {round_name} | 同步时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     "END:VEVENT"
                 ])
             except: continue
             
     ics_content.append("END:VCALENDAR")
-    # ✅ 必须使用 \r\n 换行，否则苹果日历会报错
     return "\r\n".join(ics_content) + "\r\n"
 
 @app.get("/")

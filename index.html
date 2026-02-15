@@ -7,10 +7,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    </style>
 </head>
 <body class="bg-gradient-to-br from-gray-100 to-gray-200 min-h-screen flex items-center justify-center p-4">
 
@@ -34,9 +30,7 @@
             <label class="block text-sm font-medium text-gray-700 mb-1">选择球队</label>
             <select v-model="selectedTeam" class="w-full border border-gray-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-blue-500 transition">
                 <option value="" disabled>请选择球队...</option>
-                <option v-for="team in db[selectedLeague]" :key="team.id" :value="team">
-                    {{ team.name }}
-                </option>
+                <option v-for="team in db[selectedLeague]" :key="team.id" :value="team">{{ team.name }}</option>
             </select>
         </div>
 
@@ -45,25 +39,16 @@
                 <p class="text-xs text-gray-500 font-semibold uppercase tracking-wider">近期赛程预览</p>
                 <span v-if="isLoading" class="text-xs text-blue-500"><i class="fas fa-spinner fa-spin"></i> 抓取中...</span>
             </div>
-            
-            <div v-if="previewMatches.length > 0" class="space-y-2 max-h-48 overflow-y-auto no-scrollbar">
+            <div v-if="previewMatches.length > 0" class="space-y-2 max-h-48 overflow-y-auto">
                 <div v-for="match in previewMatches" :key="match.uid" class="flex justify-between items-center p-2 bg-gray-50 rounded-lg border border-gray-100">
                     <span class="text-sm font-medium text-gray-700 truncate mr-2">{{ match.summary }}</span>
                     <span class="text-xs text-blue-600 whitespace-nowrap font-mono">{{ match.date }}</span>
                 </div>
             </div>
-            <div v-else-if="!isLoading" class="text-center py-4 text-gray-400 text-xs italic">
-                该球队暂无近期赛程数据
-            </div>
+            <div v-else-if="!isLoading" class="text-center py-4 text-gray-400 text-xs italic">该球队暂无近期赛程数据</div>
         </div>
 
-        <div v-if="selectedTeam" class="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-xl shadow-inner">
-            <p class="text-xs text-blue-600 font-semibold mb-2 uppercase">专属订阅链接</p>
-            <div class="flex items-center justify-between bg-white border border-blue-200 rounded-lg p-2 mb-4">
-                <span class="text-sm text-gray-500 truncate mr-2">{{ generateUrl }}</span>
-                <button @click="copyLink" class="text-blue-600 p-1 hover:bg-blue-50 rounded"><i class="fa-regular fa-copy"></i></button>
-            </div>
-            
+        <div v-if="selectedTeam" class="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-xl">
             <div class="grid grid-cols-2 gap-3">
                 <a :href="webcalUrl" class="block text-center bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg shadow-md">
                     <i class="fa-brands fa-apple mr-1"></i> iOS/Mac 订阅
@@ -78,16 +63,15 @@
 
 <script>
     const { createApp, ref, computed, watch } = Vue;
-
     createApp({
         setup() {
+            // ✅ 已更新为你最新的正式域名
             const apiBaseUrl = "https://football-calendar-iota.vercel.app/api/calendar";
             const selectedLeague = ref('');
             const selectedTeam = ref('');
             const previewMatches = ref([]);
             const isLoading = ref(false);
 
-            // 包含所有球队 ID 的完整数据库
             // 本地内置的球队 ID 数据库 (基于懂球帝)
             const db = ref({
                 "🇨🇳 中超联赛": [
@@ -226,7 +210,6 @@
                 return generateUrl.value.replace("https://", "webcal://");
             });
 
-            // 抓取并解析赛程预览
             const fetchPreview = async (url) => {
                 isLoading.value = true;
                 try {
@@ -235,24 +218,15 @@
                     const matches = [];
                     const events = text.split("BEGIN:VEVENT");
                     events.shift();
-
                     events.forEach(event => {
-                        const summary = event.match(/SUMMARY:(.*)/)?.[1]?.split(' (')[0];
+                        const summary = event.match(/SUMMARY:(.*)/)?.[1]?.trim().split(' (')[0];
                         const rawDate = event.match(/DTSTART;TZID=Asia\/Shanghai:(\d{8}T\d{4})/)?.[1];
                         if (summary && rawDate && !summary.includes("暂无赛程")) {
-                            matches.push({
-                                summary,
-                                date: `${rawDate.substring(4,6)}-${rawDate.substring(6,8)} ${rawDate.substring(9,11)}:${rawDate.substring(11,13)}`,
-                                uid: Math.random()
-                            });
+                            matches.push({ summary, date: `${rawDate.substring(4,6)}-${rawDate.substring(6,8)} ${rawDate.substring(9,11)}:${rawDate.substring(11,13)}`, uid: Math.random() });
                         }
                     });
                     previewMatches.value = matches.slice(0, 5);
-                } catch (e) {
-                    console.error("预览抓取失败", e);
-                } finally {
-                    isLoading.value = false;
-                }
+                } catch (e) { console.error("抓取预览失败", e); } finally { isLoading.value = false; }
             };
 
             watch(selectedTeam, (newTeam) => {
@@ -265,7 +239,7 @@
                 alert("✅ 订阅链接已复制！");
             };
 
-            return { db, selectedLeague, selectedTeam, generateUrl, webcalUrl, copyLink, previewMatches, isLoading }
+            return { db, selectedLeague, selectedTeam, webcalUrl, copyLink, previewMatches, isLoading }
         }
     }).mount('#app');
 </script>
