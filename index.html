@@ -76,6 +76,15 @@
             const isLoading = ref(false);
             const copySuccess = ref(false);
 
+            const createAbsolute = (path) => {
+                if (!path) return '';
+                if (path.startsWith('http://') || path.startsWith('https://')) return path;
+                if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin !== 'null') {
+                  return `${window.location.origin}${path}`;
+                }
+                return `http://localhost:8000${path}`;
+            };
+
             // 本地内置的球队 ID 数据库 (基于懂球帝)
             const db = ref({
                 "🇨🇳 中超联赛": [
@@ -209,9 +218,11 @@
                 return `${apiBaseUrl}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}`;
             });
 
+            const fullUrl = computed(() => createAbsolute(generateUrl.value));
+
             const webcalUrl = computed(() => {
-                if (!generateUrl.value) return '';
-                return generateUrl.value.replace("https://", "webcal://");
+                if (!fullUrl.value) return '';
+                return fullUrl.value.replace(/^https?:/, 'webcal:');
             });
 
             const fetchPreview = async (url) => {
@@ -235,11 +246,12 @@
 
             watch(selectedTeam, (newTeam) => {
                 previewMatches.value = [];
-                if (newTeam) fetchPreview(generateUrl.value);
+                if (newTeam) fetchPreview(fullUrl.value);
             });
 
             const copyLink = () => {
-                navigator.clipboard.writeText(generateUrl.value);
+                if (!fullUrl.value) return;
+                navigator.clipboard.writeText(fullUrl.value);
                 copySuccess.value = true;
                 setTimeout(() => {
                     copySuccess.value = false;
