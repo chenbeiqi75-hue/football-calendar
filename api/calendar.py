@@ -9,7 +9,7 @@ import logging
 
 app = FastAPI()
 
-# 开启跨域支持，允许前端网页 fetch 数据进行预览
+# 开启跨域支持
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,14 +28,11 @@ def fetch_team_ics(team_id: str, team_name: str):
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
         matches = soup.find_all('div', class_='match-item')
-    except requests.exceptions.RequestException as e:
-        logging.error(f"请求错误: {e}")
-        return None
     except Exception as e:
-        logging.error(f"解析错误: {e}")
+        logging.error(f"抓取失败: {e}")
         return None
 
-    # 初始化 ICS 文件头 (符合 RFC 5545 规范)
+    # 初始化 ICS 文件头
     ics_content = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -63,8 +60,8 @@ def fetch_team_ics(team_id: str, team_name: str):
     current_month = datetime.now().month
     dt_stamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
     
-    # ✅ 核心修复：如果没抓到比赛，添加一个虚拟事件作为保底，防止 iOS 报“数据无效”
     if not matches:
+        # 保底占位事件
         ics_content.extend([
             "BEGIN:VEVENT",
             f"UID:placeholder-{team_id}@football-cal",
@@ -87,7 +84,6 @@ def fetch_team_ics(team_id: str, team_name: str):
                 date_str = date_node.text.strip()
                 if len(date_str) < 11: continue
                     
-                # 跨年逻辑：根据当前月份推算 2026 赛季年份
                 m_month = int(date_str.split('-')[0])
                 m_year = current_year
                 if current_month > 10 and m_month < 6: m_year = current_year + 1
@@ -111,12 +107,11 @@ def fetch_team_ics(team_id: str, team_name: str):
                     f"DESCRIPTION:赛事: {round_name} | 同步时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     "END:VEVENT"
                 ])
-            except Exception as e:
-                logging.error(f"处理比赛数据错误: {e}")
-                continue
+            except: continue
             
-    ics_str = "\r\n".join(ics_content) + "\r\n"
-    return ics_str.replace('\n', '').replace('\r', '') if ics_str else None
+    ics_content.append("END:VCALENDAR")
+    # ✅ 必须保留 \r\n，且绝对不能用 replace 删掉它们
+    return "\r\n".join(ics_content) + "\r\n"
 
 @app.get("/")
 def home():
@@ -126,18 +121,15 @@ def home():
 def get_calendar(team_id: str, team_name: str = "球队"):
     ics_data = fetch_team_ics(team_id, team_name)
     if ics_data is None:
-        error_msg = f"Service Error: Unable to fetch calendar for team_id={team_id}, team_name={team_name}"
-        logging.error(error_msg)
-        return Response(content=error_msg, status_code=500)
+        return Response(content="Service Error", status_code=500)
     
     safe_filename = quote(f"{team_name}.ics")
     return Response(
         content=ics_data, 
         media_type="text/calendar; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_filename}"',
+            # ✅ 推荐使用 inline
+            "Content-Disposition": f'inline; filename="{safe_filename}"',
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0"
         }
     )
