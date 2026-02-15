@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 app = FastAPI(title="Football Calendar API")
 
-# 开启跨域，确保前端网页预览功能正常
+# 开启跨域，确保前端预览功能正常
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,9 +17,6 @@ app.add_middleware(
 )
 
 def fetch_team_ics_internal(team_id: str, team_name: str):
-    """
-    内部爬虫逻辑：抓取赛程并生成标准的 ICS 文本
-    """
     url = f"https://www.dongqiudi.com/team/{team_id}.html"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -32,7 +29,6 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
     except Exception:
         return None
 
-    # 初始化 ICS 文件头
     ics_content = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -75,6 +71,7 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
                 if not date_node: continue
                 
                 date_str = date_node.text.strip()
+                # 针对 2026 赛季的时间逻辑
                 m_year = datetime.now().year
                 start_dt = datetime.strptime(f"{m_year}-{date_str}", "%Y-%m-%d %H:%M")
                 uid = hashlib.md5(f"{date_str}{team_a}{team_b}".encode()).hexdigest()
@@ -88,16 +85,13 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
                     f"SUMMARY:{team_a} vs {team_b}",
                     "END:VEVENT"
                 ])
-            except Exception:
-                continue
+            except: continue
 
     ics_content.append("END:VCALENDAR")
-    # ✅ 必须使用 \r\n，且严禁删除换行符，否则 iOS 会提示数据无效
     return "\r\n".join(ics_content) + "\r\n"
 
 @app.get("/api/calendar")
 def get_calendar(team_id: str = None, team_name: str = "球队"):
-    # 预防 422 错误：检查参数
     if not team_id:
         return Response(content="Missing team_id parameter", status_code=400)
         
@@ -110,10 +104,7 @@ def get_calendar(team_id: str = None, team_name: str = "球队"):
         content=ics_data,
         media_type="text/calendar; charset=utf-8",
         headers={
-            # ✅ 改为 inline，对 iOS 唤起订阅更友好
             "Content-Disposition": f'inline; filename="{safe_filename}"',
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0"
         }
     )
