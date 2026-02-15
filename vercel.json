@@ -1,4 +1,13 @@
 {
+  "buildCommand": "pip install -r requirements.txt",
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  },
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
