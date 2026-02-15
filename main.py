@@ -31,7 +31,6 @@ def fetch_team_ics(team_id: str, team_name: str):
         print(f"抓取失败: {e}")
         return None
 
-    # 初始化 ICS 文件头 (严格遵守 RFC 5545 规范)
     ics_content = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -59,7 +58,19 @@ def fetch_team_ics(team_id: str, team_name: str):
     current_month = datetime.now().month
     dt_stamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
     
-    if matches:
+    # ✅ 核心修复：如果没抓到比赛，添加一个虚拟事件作为保底，防止 iOS 报“数据无效”
+    if not matches:
+        ics_content.extend([
+            "BEGIN:VEVENT",
+            f"UID:placeholder-{team_id}@football-cal",
+            f"DTSTAMP:{dt_stamp}",
+            f"DTSTART;TZID=Asia/Shanghai:{datetime.now().strftime('%Y%m%dT%H%M00')}",
+            f"DTEND;TZID=Asia/Shanghai:{(datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M00')}",
+            f"SUMMARY:暂无赛程更新 (系统占位)",
+            f"DESCRIPTION:目前数据源中暂无该球队最新赛程，请耐心等待同步。",
+            "END:VEVENT"
+        ])
+    else:
         for match in matches:
             try:
                 date_node = match.find('span', class_='date')
@@ -68,11 +79,9 @@ def fetch_team_ics(team_id: str, team_name: str):
                 team_b_node = match.find('p', class_='team-b')
                 
                 if not (date_node and team_a_node and team_b_node): continue
-                    
-                date_str = date_node.text.strip() # 示例: "02-16 04:00"
+                date_str = date_node.text.strip()
                 if len(date_str) < 11: continue
                     
-                # 跨年逻辑推算
                 m_month = int(date_str.split('-')[0])
                 m_year = current_year
                 if current_month > 10 and m_month < 6: m_year = current_year + 1
@@ -84,8 +93,6 @@ def fetch_team_ics(team_id: str, team_name: str):
                 
                 start_dt = datetime.strptime(f"{m_year}-{date_str}", "%Y-%m-%d %H:%M")
                 end_dt = start_dt + timedelta(hours=2)
-                
-                # 唯一标识符，防止重复
                 uid_hash = hashlib.md5(f"{m_year}-{date_str}-{home_team}-{away_team}".encode('utf-8')).hexdigest()
                 
                 ics_content.extend([
@@ -98,11 +105,9 @@ def fetch_team_ics(team_id: str, team_name: str):
                     f"DESCRIPTION:赛事类型: {round_name}\\n数据同步时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     "END:VEVENT"
                 ])
-            except:
-                continue
+            except: continue
             
     ics_content.append("END:VCALENDAR")
-    
     # ✅ 必须使用 \r\n 换行，否则苹果日历会报错
     return "\r\n".join(ics_content) + "\r\n"
 
@@ -113,20 +118,15 @@ def home():
 @app.get("/api/calendar")
 def get_calendar(team_id: str, team_name: str = "球队"):
     ics_data = fetch_team_ics(team_id, team_name)
-    
     if ics_data is None:
         return Response(content="Service Error", status_code=500)
     
-    # 编码文件名，防止 Safari 解析错误
     safe_filename = quote(f"{team_name}.ics")
-    
     return Response(
         content=ics_data, 
         media_type="text/calendar; charset=utf-8",
         headers={
-            # inline 触发跳转订阅，不弹出下载框
             "Content-Disposition": f'inline; filename="{safe_filename}"',
-            # 彻底禁用缓存，确保每次都是最新赛程
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0"
