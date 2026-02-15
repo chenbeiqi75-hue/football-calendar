@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import hashlib
 from urllib.parse import quote
+import logging
 
 app = FastAPI()
 
@@ -27,8 +28,11 @@ def fetch_team_ics(team_id: str, team_name: str):
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
         matches = soup.find_all('div', class_='match-item')
+    except requests.exceptions.RequestException as e:
+        logging.error(f"请求错误: {e}")
+        return None
     except Exception as e:
-        print(f"抓取失败: {e}")
+        logging.error(f"解析错误: {e}")
         return None
 
     # 初始化 ICS 文件头 (符合 RFC 5545 规范)
@@ -107,10 +111,12 @@ def fetch_team_ics(team_id: str, team_name: str):
                     f"DESCRIPTION:赛事: {round_name} | 同步时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     "END:VEVENT"
                 ])
-            except: continue
+            except Exception as e:
+                logging.error(f"处理比赛数据错误: {e}")
+                continue
             
-    ics_content.append("END:VCALENDAR")
-    return "\r\n".join(ics_content) + "\r\n"
+    ics_str = "\r\n".join(ics_content) + "\r\n"
+    return ics_str.replace('\n', '').replace('\r', '') if ics_str else None
 
 @app.get("/")
 def home():
@@ -120,14 +126,16 @@ def home():
 def get_calendar(team_id: str, team_name: str = "球队"):
     ics_data = fetch_team_ics(team_id, team_name)
     if ics_data is None:
-        return Response(content="Service Error", status_code=500)
+        error_msg = f"Service Error: Unable to fetch calendar for team_id={team_id}, team_name={team_name}"
+        logging.error(error_msg)
+        return Response(content=error_msg, status_code=500)
     
     safe_filename = quote(f"{team_name}.ics")
     return Response(
         content=ics_data, 
         media_type="text/calendar; charset=utf-8",
         headers={
-            "Content-Disposition": f'inline; filename="{safe_filename}"',
+            "Content-Disposition": f'attachment; filename="{safe_filename}"',
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0"

@@ -49,13 +49,16 @@
         </div>
 
         <div v-if="selectedTeam" class="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-xl">
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-2 gap-3 items-center">
                 <a :href="webcalUrl" class="block text-center bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg shadow-md">
                     <i class="fa-brands fa-apple mr-1"></i> iOS/Mac 订阅
                 </a>
-                <button @click="copyLink" class="bg-white border border-blue-600 text-blue-600 font-medium py-3 rounded-lg hover:bg-blue-50 transition">
-                    <i class="fa-brands fa-android mr-1"></i> 复制链接
-                </button>
+                <div class="flex items-center space-x-2">
+                    <button @click="copyLink" class="bg-white border border-blue-600 text-blue-600 font-medium py-3 px-4 rounded-lg hover:bg-blue-50 transition flex items-center">
+                        <i class="fa-brands fa-android mr-1"></i> 复制链接
+                    </button>
+                    <span v-if="copySuccess" class="text-blue-600 text-sm select-none">✅ 订阅链接已复制！</span>
+                </div>
             </div>
         </div>
     </div>
@@ -65,12 +68,13 @@
     const { createApp, ref, computed, watch } = Vue;
     createApp({
         setup() {
-            // ✅ 已更新为你最新的正式域名
-            const apiBaseUrl = "https://football-calendar-alpha.vercel.app/api/calendar";
+            // ✅ 已更新为相对路径，便于 Vercel 部署
+            const apiBaseUrl = "/api/calendar";
             const selectedLeague = ref('');
             const selectedTeam = ref('');
             const previewMatches = ref([]);
             const isLoading = ref(false);
+            const copySuccess = ref(false);
 
             // 本地内置的球队 ID 数据库 (基于懂球帝)
             const db = ref({
@@ -236,10 +240,13 @@
 
             const copyLink = () => {
                 navigator.clipboard.writeText(generateUrl.value);
-                alert("✅ 订阅链接已复制！");
+                copySuccess.value = true;
+                setTimeout(() => {
+                    copySuccess.value = false;
+                }, 2000);
             };
 
-            return { db, selectedLeague, selectedTeam, webcalUrl, copyLink, previewMatches, isLoading }
+            return { db, selectedLeague, selectedTeam, webcalUrl, copyLink, previewMatches, isLoading, copySuccess }
         }
     }).mount('#app');
 </script>
