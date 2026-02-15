@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚽ 共享赛程日历生成器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gradient-to-br from-gray-100 to-gray-200 min-h-screen flex items-center justify-center p-4">
+
+<div id="app" class="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden">
+    <div class="bg-blue-600 p-6 text-white text-center">
+        <i class="fa-regular fa-calendar-check text-4xl mb-3"></i>
+        <h1 class="text-2xl font-bold">赛程日历生成器</h1>
+        <p class="text-blue-100 text-sm mt-1">自动同步改期、延期，永不错过比赛</p>
+    </div>
+
+    <div class="p-6 space-y-5">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">选择联赛</label>
+            <select v-model="selectedLeague" class="w-full border border-gray-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                <option value="" disabled>请选择联赛...</option>
+                <option v-for="(teams, league) in db" :key="league" :value="league">{{ league }}</option>
+            </select>
+        </div>
+
+        <div v-if="selectedLeague">
+            <label class="block text-sm font-medium text-gray-700 mb-1">选择球队</label>
+            <select v-model="selectedTeam" class="w-full border border-gray-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                <option value="" disabled>请选择主队...</option>
+                <option v-for="team in db[selectedLeague]" :key="team.id" :value="team">
+                    {{ team.name }}
+                </option>
+            </select>
+        </div>
+
+        <div v-if="selectedTeam" class="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+            <p class="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wider">专属订阅链接</p>
+            <div class="flex items-center justify-between bg-white border border-gray-200 rounded-lg p-2 overflow-hidden mb-4">
+                <span class="text-sm text-gray-600 truncate whitespace-nowrap overflow-x-auto w-full mr-2">
+                    {{ generateUrl }}
+                </span>
+                <button @click="copyLink" class="shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-700 p-2 rounded-md transition" title="复制链接">
+                    <i class="fa-regular fa-copy"></i>
+                </button>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-3">
+                <a :href="webcalUrl" class="block text-center bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg transition shadow-md shadow-blue-500/30">
+                    <i class="fa-brands fa-apple mr-1"></i> iOS/Mac 订阅
+                </a>
+                <button @click="copyLink" class="block text-center bg-green-500 hover:bg-green-600 text-white font-medium py-3 rounded-lg transition shadow-md shadow-green-500/30">
+                    <i class="fa-brands fa-android mr-1"></i> 复制安卓链接
+                </button>
+            </div>
+            <p class="text-xs text-gray-400 mt-3 text-center">将链接粘贴至 Google/Outlook/手机自带日历中即可</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+        setup() {
+            // ⚠️ 这里未来需要替换成你部署在 Vercel 上的真实后端地址
+            // ✅ 将这一行改为你的本地真实地址
+            const apiBaseUrl = "http://192.168.10.6:8000/api/calendar";
+            
+            const selectedLeague = ref('');
+            const selectedTeam = ref('');
+
+            // 本地内置的球队 ID 数据库 (基于懂球帝)
+            const db = ref({
+                "🇨🇳 中超联赛": [
+                    { name: "成都蓉城", id: "50076899" },
+                    { name: "云南玉昆", id: "50117905" },
+                    { name: "青岛西海岸", id: "50093933" },
+                    { name: "大连英博", id: "50122423" },
+                    { name: "深圳新鹏城", id: "50053965" },
+                    { name: "辽宁铁人", id: "50016400" },
+                    { name: "重庆铜梁龙", id: "50122484" },
+                    { name: "上海海港", id: "50007190" },
+                    { name: "北京国安", id: "50000330" },
+                    { name: "浙江", id: "50000341" },
+                    { name: "武汉三镇", id: "50077677" },
+                    { name: "山东泰山", id: "50000335" },
+                    { name: "河南", id: "50000339" },
+                    { name: "青岛海牛", id: "50000328" },
+                    { name: "上海申花", id: "50000334" },
+                    { name: "天津津门虎", id: "50000332" }
+                ],
+                "🇬🇧 英格兰超级联赛": [
+                    { name: "阿森纳", id: "50000513" },
+                    { name: "曼城", id: "50000529" },
+                    { name: "阿斯顿维拉", id: "50000518" },
+                    { name: "曼联", id: "50000515" },
+                    { name: "切尔西", id: "50000514" },
+                    { name: "利物浦", id: "50000516" },
+                    { name: "布伦特福德", id: "50000575" },
+                    { name: "埃弗顿", id: "50000527" },
+                    { name: "伯恩茅斯", id: "50000564" },
+                    { name: "纽卡斯尔联", id: "50000517" },
+                    { name: "桑德兰", id: "50000536" },
+                    { name: "富勒姆", id: "50000520" },
+                    { name: "水晶宫", id: "50000532" },
+                    { name: "布莱顿", id: "50000556" },
+                    { name: "利兹联", id: "50000534" },
+                    { name: "托特纳姆热刺", id: "50000528" },
+                    { name: "诺丁汉森林", id: "50000547" },
+                    { name: "西汉姆联", id: "50000537" },
+                    { name: "伯恩利", id: "50000551" },
+                    { name: "狼队", id: "50000533" }
+                ],
+                "🇪🇸 西班牙甲级联赛": [
+                    { "name": "皇家马德里", "id": "50001755" },
+                    { "name": "巴塞罗那", "id": "50001756" },
+                    { "name": "马德里竞技", "id": "50001759" },
+                    { "name": "比利亚雷亚尔", "id": "50001762" },
+                    { "name": "皇家贝蒂斯", "id": "50001764" },
+                    { "name": "西班牙人", "id": "50001771" },
+                    { "name": "塞尔塔", "id": "50001772" },
+                    { "name": "皇家社会", "id": "50001767" },
+                    { "name": "奥萨苏纳", "id": "50001761" },
+                    { "name": "赫塔费", "id": "50001778" },
+                    { "name": "毕尔巴鄂竞技", "id": "50001758" },
+                    { "name": "塞维利亚", "id": "50001760" },
+                    { "name": "阿拉维斯", "id": "50001776" },
+                    { "name": "赫罗纳", "id": "50001836" },
+                    { "name": "埃尔切", "id": "50001782" },
+                    { "name": "马略卡", "id": "50001766" },
+                    { "name": "瓦伦西亚", "id": "50001754" },
+                    { "name": "巴列卡诺", "id": "50001793" },
+                    { "name": "莱万特", "id": "50001775" },
+                    { "name": "皇家奥维耶多", "id": "50002061" }
+                ],
+                "🇩🇪 德国甲级联赛": [
+                    { "name": "拜仁慕尼黑", "id": "50000804" },
+                    { "name": "多特蒙德", "id": "50000807" },
+                    { "name": "霍芬海姆", "id": "50000842" },
+                    { "name": "斯图加特", "id": "50000805" },
+                    { "name": "勒沃库森", "id": "50000806" },
+                    { "name": "RB莱比锡", "id": "50008568" },
+                    { "name": "法兰克福", "id": "50000822" },
+                    { "name": "弗赖堡", "id": "50000813" },
+                    { "name": "汉堡", "id": "50000810" },
+                    { "name": "柏林联合", "id": "50000860" },
+                    { "name": "科隆", "id": "50000823" },
+                    { "name": "门兴格拉德巴赫", "id": "50000814" },
+                    { "name": "奥格斯堡", "id": "50000841" },
+                    { "name": "美因茨", "id": "50000820" },
+                    { "name": "沃尔夫斯堡", "id": "50000811" },
+                    { "name": "云达不莱梅", "id": "50000803" },
+                    { "name": "圣保利", "id": "50000855" },
+                    { "name": "海登海姆", "id": "50004404" }
+                ],
+                "🇫🇷 法国甲级联赛": [
+                    { "name": "朗斯", "id": "50000737" },
+                    { "name": "巴黎圣日耳曼", "id": "50000731" },
+                    { "name": "里昂", "id": "50000729" },
+                    { "name": "马赛", "id": "50000735" },
+                    { "name": "里尔", "id": "50000740" },
+                    { "name": "雷恩", "id": "50000738" },
+                    { "name": "斯特拉斯堡", "id": "50000743" },
+                    { "name": "摩纳哥", "id": "50000730" },
+                    { "name": "图卢兹", "id": "50000744" },
+                    { "name": "昂热", "id": "50000763" },
+                    { "name": "洛里昂", "id": "50000752" },
+                    { "name": "布雷斯特", "id": "50000767" },
+                    { "name": "勒阿弗尔", "id": "50000757" },
+                    { "name": "尼斯", "id": "50000739" },
+                    { "name": "巴黎FC", "id": "50002258" },
+                    { "name": "欧塞尔", "id": "50000733" },
+                    { "name": "南特", "id": "50000734" },
+                    { "name": "梅斯", "id": "50000741" }
+                ],
+                "🇮🇹 意大利甲级联赛": [
+                    { "name": "国际米兰", "id": "50001042" },
+                    { "name": "AC米兰", "id": "50001038" },
+                    { "name": "那不勒斯", "id": "50001068" },
+                    { "name": "尤文图斯", "id": "50001040" },
+                    { "name": "罗马", "id": "50001039" },
+                    { "name": "亚特兰大", "id": "50001053" },
+                    { "name": "科莫", "id": "50001081" },
+                    { "name": "拉齐奥", "id": "50001043" },
+                    { "name": "乌迪内斯", "id": "50001044" },
+                    { "name": "博洛尼亚", "id": "50001047" },
+                    { "name": "萨索洛", "id": "50004293" },
+                    { "name": "卡利亚里", "id": "50001054" },
+                    { "name": "都灵", "id": "50001066" },
+                    { "name": "帕尔马", "id": "50001041" },
+                    { "name": "热那亚", "id": "50001074" },
+                    { "name": "克雷莫内塞", "id": "50002065" },
+                    { "name": "佛罗伦萨", "id": "50001057" },
+                    { "name": "莱切", "id": "50001049" },
+                    { "name": "比萨", "id": "50001088" },
+                    { "name": "维罗纳", "id": "50001075" }
+                ]
+            });
+            
+            // 计算生成的 API 链接
+            const generateUrl = computed(() => {
+                if (!selectedTeam.value) return '';
+                // 拼接 URL，注意要进行 URL 编码防止中文乱码
+                return `${apiBaseUrl}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}`;
+            });
+
+            // 计算供 iOS 唤起的 webcal:// 协议链接
+            // 找到 setup() 里的这部分进行替换
+            const webcalUrl = computed(() => {
+                if (!selectedTeam.value) return '';
+                // 强制将 http:// 替换为 webcal://
+                // 这会告诉手机：“不要用浏览器打开，请直接唤起日历 App”
+                return generateUrl.value.replace("http://", "webcal://").replace("https://", "webcal://");
+            });
+
+            // 复制链接功能
+            const copyLink = () => {
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(generateUrl.value);
+                } else {
+                    // 兼容旧版浏览器
+                    let textArea = document.createElement("textarea");
+                    textArea.value = generateUrl.value;
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    document.execCommand('copy');
+                    textArea.remove();
+                }
+                alert("✅ 日历订阅链接已复制！去日历 APP 中粘贴订阅吧。");
+            };
+
+            return {
+                db,
+                selectedLeague,
+                selectedTeam,
+                generateUrl,
+                webcalUrl,
+                copyLink
+            }
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
