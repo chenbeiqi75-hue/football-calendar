@@ -9,6 +9,13 @@
 
 ## 方式 A：通过 GitHub 自动部署（推荐 ⭐）
 
+### 为什么推荐这种方式？
+
+- ✅ 最简单：无需配置 GitHub Secrets
+- ✅ 最官方：Vercel 官方推荐
+- ✅ 最安全：无需暴露 token 到 GitHub
+- ✅ 最快：无需 GitHub Actions 编译步骤
+
 ### 步骤 1：准备代码
 
 确保项目已上传到 GitHub：
@@ -80,7 +87,45 @@ Vercel 会自动：
 
 ---
 
-## 方式 B：使用 Vercel CLI
+## 方式 B（可选）：使用 GitHub Actions + Vercel CLI
+
+此方式在 PR 上自动生成预览链接（仅用于测试，不影响生产部署）。
+
+### 前置条件
+
+1. 已完成方式 A 的初始设置
+2. 在 Vercel 获取 token（见方式 C）
+
+### 步骤 1：配置 GitHub Secrets
+
+在 GitHub 仓库设置中添加以下 3 个 Secrets：
+
+- `VERCEL_TOKEN` - 你的 Vercel token
+- `VERCEL_ORG_ID` - 你的 Vercel 组织 ID  
+- `VERCEL_PROJECT_ID` - 你的 Vercel 项目 ID
+
+**如何获取这些值？** 见详细指南：[VERCEL_SECRETS.md](VERCEL_SECRETS.md)
+
+### 步骤 2：启用可选的 Deploy Workflow
+
+项目包含一个可选的 GitHub Actions workflow：
+
+```
+.github/workflows/deploy-vercel-cli.yml.disabled
+```
+
+如需启用自动 PR 预览部署：
+1. 重命名文件：删除 `.disabled` 后缀
+2. Push 到 GitHub
+3. 之后每个 PR 都会自动部署预览版本
+
+### 步骤 3：验证
+
+创建测试 PR，应该看到 Vercel 预览链接被评论到 PR 中。
+
+---
+
+## 方式 C：使用 Vercel CLI
 
 如果你更喜欢命令行操作，可以使用 Vercel CLI。
 
@@ -136,6 +181,18 @@ vercel --prod
 # 仅生成预览（用于测试）
 vercel
 ```
+
+---
+
+## 部署方式对比表
+
+| 特性 | 方式 A（推荐）| 方式 B（可选）| 方式 C（CLI）|
+|------|----------|----------|-----------|
+| 安装复杂度 | ⭐ 最简单 | ⭐⭐ 一般 | ⭐⭐ 一般 |
+| 自动部署 | ✅ 自动 | ✅ 自动（PR 预览）| ❌ 手动 |
+| 需要 Token | ❌ 否 | ✅ 是 | ✅ 是 |
+| 官方推荐 | ✅ 是 | - | ✅ 是 |
+| 适用场景 | 大多数用户 | 需要 PR 预览 | 本地开发或自定义 |
 
 ---
 
@@ -239,9 +296,29 @@ https://your-domain.vercel.app/health
 2. 添加缓存机制（涉及更复杂的改动）
 3. 切换数据源（如可用官方 API）
 
+### ℹ️ GitHub Actions 相关问题
+
+**Q: GitHub Actions 中有错误提示？**
+
+A: 不用担心！当前配置已修复：
+- ✅ `deploy.yml` 只包含测试步骤（无需配置）
+- ℹ️ 可选的 `deploy-vercel-cli.yml.disabled` 用于 PR 预览（需 Secrets）
+- 详情见 [GITHUB_ACTIONS_FIX.md](GITHUB_ACTIONS_FIX.md)
+
+**Q: 如何启用 GitHub Actions 自动部署？**
+
+A: 推荐使用 Vercel 官方 GitHub 集成（方式 A），无需 Action：
+1. Push 代码到 GitHub
+2. 在 Vercel Dashboard 连接仓库
+3. 每次 push 都自动部署
+
+若需 PR 预览功能：
+1. 参考 [VERCEL_SECRETS.md](VERCEL_SECRETS.md) 配置 Secrets
+2. 启用 `deploy-vercel-cli.yml.disabled` 文件
+
 ---
 
-## 环境变量（高级）
+## 监测和日志
 
 如果需要添加环境变量（如数据库、API Key 等）：
 

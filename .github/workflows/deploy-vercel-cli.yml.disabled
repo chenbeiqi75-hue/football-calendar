@@ -1,0 +1,44 @@
+# 此文件是 GitHub Actions 自动部署到 Vercel 的可选配置
+# 
+# 使用场景：你想要每次 push 到 main 分支时，自动部署到 Vercel
+# 推荐：Vercel 官方推荐直接连接 GitHub 仓库（自动部署），无需此 Action
+#
+# 要启用此工作流，请将文件重命名为  deploy-vercel-cli.yml
+# 然后按照下面的步骤配置 GitHub Secrets
+
+name: Deploy to Vercel (Optional - Vercel CLI)
+
+# 仅在 PR 时运行此工作流（推荐），避免重复部署
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, reopened, synchronize]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy Preview to Vercel
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to Vercel Preview
+        id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./
+          # 注：设置 prod: false 用于预览，main 分支上 Vercel 自动部署到生产
+
+      - name: Comment PR with Deployment URL
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Vercel 预览已部署: ${{ steps.deploy.outputs.preview-url }}'
+            })
