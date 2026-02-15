@@ -257,7 +257,7 @@ MIT License - 自由使用、修改和分发
 
 ## 📞 联系方式
 
-- 📧 Email: chenbeiqi@example.com
+- 📧 Email: chenbeiqi75@gmail.com
 - 🐦 Twitter: [@chenbeiqi](https://twitter.com/chenbeiqi)
 - 💬 GitHub Issues: [football-calendar/issues](https://github.com/chenbeiqi/football-calendar/issues)
 
