@@ -246,11 +246,50 @@ def fetch_team_ics_internal(team_id: str, team_name: str) -> Tuple[Optional[str]
     ics_content.append("END:VCALENDAR")
     return "\r\n".join(ics_content) + "\r\n", None
 
+
+def build_fallback_ics(team_id: str, team_name: str, reason: str) -> str:
+    """
+    抓取失败时返回一个合法 ICS，避免 Google/Outlook 因 500 无法添加订阅。
+    """
+    now = datetime.now()
+    dt_stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    ics_content = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        f"PRODID:-//OpenSource//FootballCalendar//{team_name}//CN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        f"X-WR-CALNAME:{team_name}赛程",
+        "X-WR-TIMEZONE:Asia/Shanghai",
+        "X-WR-CALDESC:抓取失败时自动降级，稍后会继续同步",
+        "BEGIN:VTIMEZONE",
+        "TZID:Asia/Shanghai",
+        "BEGIN:STANDARD",
+        "TZOFFSETFROM:+0800",
+        "TZOFFSETTO:+0800",
+        "TZNAME:CST",
+        "DTSTART:19700101T000000",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+        "BEGIN:VEVENT",
+        f"UID:fallback-{team_id}@football-cal",
+        f"DTSTAMP:{dt_stamp}",
+        f"DTSTART;TZID=Asia/Shanghai:{now.strftime('%Y%m%dT%H%M00')}",
+        f"DTEND;TZID=Asia/Shanghai:{(now + timedelta(hours=1)).strftime('%Y%m%dT%H%M00')}",
+        "SUMMARY:【系统消息】赛程同步中",
+        f"DESCRIPTION:{_ics_escape(f'当前抓取失败原因: {reason}。系统将继续自动重试。')}",
+        "STATUS:CONFIRMED",
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ]
+    return "\r\n".join(ics_content) + "\r\n"
+
 @app.get("/api/calendar")
 def get_calendar(
     team_id: Optional[str] = None,
     team_name: str = "球队",
     download: int = Query(default=0, ge=0, le=1),
+    allow_fallback: int = Query(default=1, ge=0, le=1),
 ):
     """
     生成并返回球队赛程的 ICS 日历文件
@@ -277,14 +316,18 @@ def get_calendar(
     ics_data, error = fetch_team_ics_internal(team_id, team_name)
     if ics_data is None:
         logger.error(f"生成日历失败: team_id={team_id}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "FETCH_FAILED",
-                "error_code": error.get("error_code", "UPSTREAM_UNAVAILABLE"),
-                "message": error.get("error_message", ERROR_MESSAGES["UPSTREAM_UNAVAILABLE"]),
-            },
-        )
+        if allow_fallback == 1:
+            reason = error.get("error_message", ERROR_MESSAGES["UPSTREAM_UNAVAILABLE"])
+            ics_data = build_fallback_ics(team_id, team_name, reason)
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "FETCH_FAILED",
+                    "error_code": error.get("error_code", "UPSTREAM_UNAVAILABLE"),
+                    "message": error.get("error_message", ERROR_MESSAGES["UPSTREAM_UNAVAILABLE"]),
+                },
+            )
     
     safe_filename = quote(f"{team_name}.ics")
     logger.info(f"成功生成日历: {safe_filename}")

@@ -229,7 +229,7 @@
             
             const generateUrl = computed(() => {
                 if (!selectedTeam.value) return '';
-                return `${calendarApiBase}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}`;
+                return `${calendarApiBase}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}&allow_fallback=1`;
             });
 
             const fullUrl = computed(() => createAbsolute(generateUrl.value));
