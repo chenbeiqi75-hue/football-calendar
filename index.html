@@ -48,17 +48,27 @@
             <div v-else-if="!isLoading" class="text-center py-4 text-gray-400 text-xs italic">该球队暂无近期赛程数据</div>
         </div>
 
-        <div v-if="selectedTeam" class="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-xl">
-            <div class="grid grid-cols-2 gap-3 items-center">
+        <div v-if="selectedTeam" class="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-xl space-y-3">
+            <p class="text-xs text-blue-700 font-semibold">导入共享日历</p>
+            <div class="grid grid-cols-2 gap-3">
                 <a :href="webcalUrl" class="block text-center bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-lg shadow-md">
-                    <i class="fa-brands fa-apple mr-1"></i> iOS/Mac 订阅
+                    <i class="fa-brands fa-apple mr-1"></i> iOS/Mac
                 </a>
-                <div class="flex items-center space-x-2">
-                    <button @click="copyLink" class="bg-white border border-blue-600 text-blue-600 font-medium py-3 px-4 rounded-lg hover:bg-blue-50 transition flex items-center">
-                        <i class="fa-brands fa-android mr-1"></i> 复制链接
-                    </button>
-                    <span v-if="copySuccess" class="text-blue-600 text-sm select-none">✅ 订阅链接已复制！</span>
-                </div>
+                <a :href="googleCalendarUrl" target="_blank" rel="noopener" class="block text-center bg-red-500 hover:bg-red-600 text-white font-medium py-3 rounded-lg shadow-md">
+                    <i class="fa-brands fa-google mr-1"></i> Google
+                </a>
+                <a :href="outlookCalendarUrl" target="_blank" rel="noopener" class="block text-center bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-3 rounded-lg shadow-md">
+                    <i class="fa-brands fa-microsoft mr-1"></i> Outlook
+                </a>
+                <a :href="downloadUrl" class="block text-center bg-white border border-blue-600 text-blue-700 font-medium py-3 rounded-lg hover:bg-blue-100 transition">
+                    <i class="fa-solid fa-file-arrow-down mr-1"></i> 下载 ICS
+                </a>
+            </div>
+            <div class="flex items-center space-x-2">
+                <button @click="copyLink" class="bg-white border border-blue-600 text-blue-600 font-medium py-2 px-4 rounded-lg hover:bg-blue-100 transition flex items-center">
+                    <i class="fa-solid fa-link mr-1"></i> 复制订阅链接
+                </button>
+                <span v-if="copySuccess" class="text-blue-600 text-sm select-none">链接已复制</span>
             </div>
         </div>
     </div>
@@ -68,8 +78,8 @@
     const { createApp, ref, computed, watch } = Vue;
     createApp({
         setup() {
-            // ✅ 已更新为相对路径，便于 Vercel 部署
-            const apiBaseUrl = "/api/calendar";
+            const calendarApiBase = "/api/calendar";
+            const previewApiBase = "/api/preview";
             const selectedLeague = ref('');
             const selectedTeam = ref('');
             const previewMatches = ref([]);
@@ -215,38 +225,52 @@
             
             const generateUrl = computed(() => {
                 if (!selectedTeam.value) return '';
-                return `${apiBaseUrl}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}`;
+                return `${calendarApiBase}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}`;
             });
 
             const fullUrl = computed(() => createAbsolute(generateUrl.value));
+            const downloadUrl = computed(() => {
+                if (!generateUrl.value) return '';
+                return `${generateUrl.value}&download=1`;
+            });
 
             const webcalUrl = computed(() => {
                 if (!fullUrl.value) return '';
                 return fullUrl.value.replace(/^https?:/, 'webcal:');
             });
 
+            const googleCalendarUrl = computed(() => {
+                if (!fullUrl.value) return '';
+                return `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(fullUrl.value)}`;
+            });
+
+            const outlookCalendarUrl = computed(() => {
+                if (!fullUrl.value || !selectedTeam.value) return '';
+                return `https://outlook.live.com/calendar/0/addcalendar?url=${encodeURIComponent(fullUrl.value)}&name=${encodeURIComponent(selectedTeam.value.name + ' 赛程')}`;
+            });
+
+            const previewUrl = computed(() => {
+                if (!selectedTeam.value) return '';
+                return `${previewApiBase}?team_id=${selectedTeam.value.id}&team_name=${encodeURIComponent(selectedTeam.value.name)}&limit=8`;
+            });
+
             const fetchPreview = async (url) => {
                 isLoading.value = true;
                 try {
                     const response = await fetch(url);
-                    const text = await response.text();
-                    const matches = [];
-                    const events = text.split("BEGIN:VEVENT");
-                    events.shift();
-                    events.forEach(event => {
-                        const summary = event.match(/SUMMARY:(.*)/)?.[1]?.trim().split(' (')[0];
-                        const rawDate = event.match(/DTSTART;TZID=Asia\/Shanghai:(\d{8}T\d{4})/)?.[1];
-                        if (summary && rawDate && !summary.includes("暂无赛程")) {
-                            matches.push({ summary, date: `${rawDate.substring(4,6)}-${rawDate.substring(6,8)} ${rawDate.substring(9,11)}:${rawDate.substring(11,13)}`, uid: Math.random() });
-                        }
-                    });
-                    previewMatches.value = matches.slice(0, 5);
+                    if (!response.ok) throw new Error(`preview status: ${response.status}`);
+                    const data = await response.json();
+                    previewMatches.value = (data.matches || []).map((item, idx) => ({
+                        summary: item.summary,
+                        date: item.date,
+                        uid: `${item.start_iso || item.date}-${idx}`
+                    }));
                 } catch (e) { console.error("抓取预览失败", e); } finally { isLoading.value = false; }
             };
 
             watch(selectedTeam, (newTeam) => {
                 previewMatches.value = [];
-                if (newTeam) fetchPreview(fullUrl.value);
+                if (newTeam) fetchPreview(previewUrl.value);
             });
 
             const copyLink = () => {
@@ -258,7 +282,19 @@
                 }, 2000);
             };
 
-            return { db, selectedLeague, selectedTeam, webcalUrl, copyLink, previewMatches, isLoading, copySuccess }
+            return {
+                db,
+                selectedLeague,
+                selectedTeam,
+                webcalUrl,
+                googleCalendarUrl,
+                outlookCalendarUrl,
+                downloadUrl,
+                copyLink,
+                previewMatches,
+                isLoading,
+                copySuccess
+            }
         }
     }).mount('#app');
 </script>

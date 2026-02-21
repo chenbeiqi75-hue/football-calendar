@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from bs4 import BeautifulSoup
@@ -7,6 +7,7 @@ import hashlib
 from urllib.parse import quote
 import logging
 import os
+from typing import Dict, List, Optional
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Football Calendar API",
-    version="1.0.0",
+    version="1.1.0",
     description="足球赛程日历生成器 - 自动同步改期、延期"
 )
 
@@ -27,8 +28,124 @@ app.add_middleware(
 )
 
 # 网络请求超时配置
-REQUEST_TIMEOUT = 10
-MAX_RETRIES = 2
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "600"))
+
+_schedule_cache: Dict[str, Dict] = {}
+
+
+def _ics_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace(",", "\\,")
+        .replace(";", "\\;")
+    )
+
+
+def _infer_match_datetime(raw_date: str, now: datetime) -> Optional[datetime]:
+    """
+    把懂球帝常见的 MM-DD HH:MM 转成 datetime，带跨年修正。
+    """
+    try:
+        parsed = datetime.strptime(raw_date, "%m-%d %H:%M")
+    except ValueError:
+        return None
+
+    year = now.year
+    # 跨赛季修正：当前月很小而比赛月很大，判定为上一年；反之为下一年。
+    if now.month <= 2 and parsed.month >= 10:
+        year -= 1
+    elif now.month >= 10 and parsed.month <= 2:
+        year += 1
+    return datetime(year, parsed.month, parsed.day, parsed.hour, parsed.minute)
+
+
+def _extract_matches_from_html(soup: BeautifulSoup, now: datetime) -> List[Dict]:
+    """
+    优先解析 DOM 结构；若页面样式更新，可继续向后兼容扩展。
+    """
+    raw_matches: List[Dict] = []
+    candidate_items = soup.select("div.match-item, li.match-item")
+
+    for item in candidate_items:
+        date_node = item.select_one("span.date")
+        team_a_node = item.select_one("p.team-a span")
+        team_b_node = item.select_one("p.team-b span")
+        if not (date_node and team_a_node and team_b_node):
+            continue
+        raw_date = date_node.get_text(strip=True)
+        start_dt = _infer_match_datetime(raw_date, now)
+        if not start_dt:
+            continue
+
+        team_a = team_a_node.get_text(strip=True)
+        team_b = team_b_node.get_text(strip=True)
+        raw_matches.append(
+            {
+                "start_dt": start_dt,
+                "team_a": team_a,
+                "team_b": team_b,
+                "summary": f"{team_a} vs {team_b}",
+            }
+        )
+
+    raw_matches.sort(key=lambda x: x["start_dt"])
+    return raw_matches
+
+
+def fetch_team_schedule(team_id: str, team_name: str) -> Optional[List[Dict]]:
+    """
+    从懂球帝抓取球队赛程（结构化结果）。
+    """
+    cache_key = f"{team_id}:{team_name}"
+    cache_hit = _schedule_cache.get(cache_key)
+    now = datetime.now()
+    if cache_hit and cache_hit["expires_at"] > now:
+        return cache_hit["matches"]
+
+    url = f"https://www.dongqiudi.com/team/{team_id}.html"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+
+    matches: List[Dict] = []
+    for attempt in range(MAX_RETRIES):
+        try:
+            logger.info(f"[{team_name}] 正在抓取赛程 (尝试 {attempt + 1}/{MAX_RETRIES})")
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            response.encoding = "utf-8"
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            matches = _extract_matches_from_html(soup, now)
+            logger.info(f"[{team_name}] 抓取完成，解析到 {len(matches)} 场比赛")
+            break
+        except requests.exceptions.Timeout:
+            logger.warning(f"[{team_name}] 网络超时 (尝试 {attempt + 1}/{MAX_RETRIES})")
+            if attempt == MAX_RETRIES - 1:
+                logger.error(f"[{team_name}] 最终失败：网络超时")
+                return None
+        except requests.exceptions.RequestException as exc:
+            logger.warning(f"[{team_name}] 网络错误: {exc} (尝试 {attempt + 1}/{MAX_RETRIES})")
+            if attempt == MAX_RETRIES - 1:
+                logger.error(f"[{team_name}] 最终失败：网络错误")
+                return None
+        except Exception as exc:
+            logger.error(f"[{team_name}] 未预期错误: {exc}", exc_info=True)
+            return None
+
+    _schedule_cache[cache_key] = {
+        "matches": matches,
+        "expires_at": datetime.now() + timedelta(seconds=CACHE_TTL_SECONDS),
+    }
+    return matches
+
 
 def fetch_team_ics_internal(team_id: str, team_name: str):
     """
@@ -41,41 +158,9 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
     Returns:
         ICS 格式的日历内容，或 None（失败时）
     """
-    url = f"https://www.dongqiudi.com/team/{team_id}.html"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    matches = []
-    
-    # 带重试的网络请求
-    for attempt in range(MAX_RETRIES):
-        try:
-            logger.info(f"[{team_name}] 正在抓取赛程 (尝试 {attempt + 1}/{MAX_RETRIES})")
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            response.encoding = 'utf-8'
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            matches = soup.find_all('div', class_='match-item')
-            logger.info(f"[{team_name}] 成功抓取，找到 {len(matches)} 场比赛")
-            break
-            
-        except requests.exceptions.Timeout:
-            logger.warning(f"[{team_name}] 网络超时 (尝试 {attempt + 1}/{MAX_RETRIES})")
-            if attempt == MAX_RETRIES - 1:
-                logger.error(f"[{team_name}] 最终失败：网络超时")
-                return None
-                
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[{team_name}] 网络错误: {str(e)} (尝试 {attempt + 1}/{MAX_RETRIES})")
-            if attempt == MAX_RETRIES - 1:
-                logger.error(f"[{team_name}] 最终失败：网络错误")
-                return None
-                
-        except Exception as e:
-            logger.error(f"[{team_name}] 未预期的错误: {str(e)}")
-            return None
+    matches = fetch_team_schedule(team_id, team_name)
+    if matches is None:
+        return None
 
     ics_content = [
         "BEGIN:VCALENDAR",
@@ -97,10 +182,10 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
         "END:VTIMEZONE"
     ]
     
-    dt_stamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
+    dt_stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     
     # 保底逻辑：若无赛程，添加占位事件防止 iOS 报错
-    if not matches:
+    if len(matches) == 0:
         logger.warning(f"[{team_name}] 暂无赛程数据，添加占位事件")
         ics_content.extend([
             "BEGIN:VEVENT",
@@ -109,54 +194,38 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
             f"DTSTART;TZID=Asia/Shanghai:{datetime.now().strftime('%Y%m%dT%H%M00')}",
             f"DTEND;TZID=Asia/Shanghai:{(datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M00')}",
             "SUMMARY:【系统消息】赛程待更新",
-            "DESCRIPTION:目前数据源中暂无该球队最新赛程数据。",
+            f"DESCRIPTION:{_ics_escape('目前数据源中暂无该球队最新赛程数据。')}",
             "END:VEVENT"
         ])
     else:
-        # 解析比赛信息
-        event_count = 0
         for match in matches:
-            try:
-                date_node = match.find('span', class_='date')
-                team_a_elem = match.find('p', class_='team-a')
-                team_b_elem = match.find('p', class_='team-b')
-                
-                # 验证数据完整性
-                if not all([date_node, team_a_elem, team_b_elem]):
-                    continue
-                    
-                team_a = team_a_elem.find('span').text.strip()
-                team_b = team_b_elem.find('span').text.strip()
-                date_str = date_node.text.strip()
-                
-                # 针对 2026 赛季的时间逻辑
-                m_year = datetime.now().year
-                start_dt = datetime.strptime(f"{m_year}-{date_str}", "%Y-%m-%d %H:%M")
-                uid = hashlib.md5(f"{date_str}{team_a}{team_b}".encode()).hexdigest()
-                
-                ics_content.extend([
-                    "BEGIN:VEVENT",
-                    f"UID:match-{uid}@football-cal",
-                    f"DTSTAMP:{dt_stamp}",
-                    f"DTSTART;TZID=Asia/Shanghai:{start_dt.strftime('%Y%m%dT%H%M00')}",
-                    f"DTEND;TZID=Asia/Shanghai:{(start_dt + timedelta(hours=2)).strftime('%Y%m%dT%H%M00')}",
-                    f"SUMMARY:{team_a} vs {team_b}",
-                    "STATUS:CONFIRMED",
-                    "END:VEVENT"
-                ])
-                event_count += 1
-                
-            except Exception as e:
-                logger.warning(f"[{team_name}] 解析比赛失败: {str(e)}")
-                continue
-        
-        logger.info(f"[{team_name}] 成功添加 {event_count} 场比赛到日历")
+            start_dt = match["start_dt"]
+            uid_seed = f"{start_dt.isoformat()}-{match['team_a']}-{match['team_b']}"
+            uid = hashlib.md5(uid_seed.encode("utf-8")).hexdigest()
+
+            ics_content.extend([
+                "BEGIN:VEVENT",
+                f"UID:match-{uid}@football-cal",
+                f"DTSTAMP:{dt_stamp}",
+                f"DTSTART;TZID=Asia/Shanghai:{start_dt.strftime('%Y%m%dT%H%M00')}",
+                f"DTEND;TZID=Asia/Shanghai:{(start_dt + timedelta(hours=2)).strftime('%Y%m%dT%H%M00')}",
+                f"SUMMARY:{_ics_escape(match['summary'])}",
+                f"DESCRIPTION:{_ics_escape(f'数据源: 懂球帝 | 球队: {team_name}')}",
+                "STATUS:CONFIRMED",
+                "END:VEVENT",
+            ])
+
+        logger.info(f"[{team_name}] 成功添加 {len(matches)} 场比赛到日历")
 
     ics_content.append("END:VCALENDAR")
     return "\r\n".join(ics_content) + "\r\n"
 
 @app.get("/api/calendar")
-def get_calendar(team_id: str = None, team_name: str = "球队"):
+def get_calendar(
+    team_id: Optional[str] = None,
+    team_name: str = "球队",
+    download: int = Query(default=0, ge=0, le=1),
+):
     """
     生成并返回球队赛程的 ICS 日历文件
     
@@ -184,16 +253,42 @@ def get_calendar(team_id: str = None, team_name: str = "球队"):
     safe_filename = quote(f"{team_name}.ics")
     logger.info(f"成功生成日历: {safe_filename}")
     
+    disposition = "attachment" if download == 1 else "inline"
     return Response(
         content=ics_data,
         media_type="text/calendar; charset=utf-8",
         headers={
-            "Content-Disposition": f'inline; filename="{safe_filename}"',
+            "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0"
         }
     )
+
+
+@app.get("/api/preview")
+def get_preview(
+    team_id: Optional[str] = None,
+    team_name: str = "球队",
+    limit: int = Query(default=5, ge=1, le=20),
+):
+    if not team_id:
+        return Response(content="Missing team_id parameter", status_code=400)
+
+    matches = fetch_team_schedule(team_id, team_name)
+    if matches is None:
+        return Response(content="Failed to fetch schedule data", status_code=500)
+
+    preview = []
+    for item in matches[:limit]:
+        preview.append(
+            {
+                "summary": item["summary"],
+                "date": item["start_dt"].strftime("%m-%d %H:%M"),
+                "start_iso": item["start_dt"].isoformat(),
+            }
+        )
+    return {"team_id": team_id, "team_name": team_name, "matches": preview}
 
 
 @app.get("/")
