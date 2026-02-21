@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Query, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from bs4 import BeautifulSoup
@@ -7,7 +8,7 @@ import hashlib
 from urllib.parse import quote
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,14 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "600"))
 
 _schedule_cache: Dict[str, Dict] = {}
+
+ERROR_MESSAGES = {
+    "TIMEOUT": "抓取懂球帝赛程超时，请稍后重试。",
+    "DNS_RESOLUTION_FAILED": "服务器无法解析懂球帝域名，当前网络环境不可达。",
+    "NETWORK_ERROR": "抓取懂球帝赛程时发生网络错误。",
+    "UNEXPECTED_ERROR": "抓取赛程时发生未预期错误。",
+    "UPSTREAM_UNAVAILABLE": "懂球帝暂时不可用或返回异常页面。",
+}
 
 
 def _ics_escape(value: str) -> str:
@@ -95,7 +104,7 @@ def _extract_matches_from_html(soup: BeautifulSoup, now: datetime) -> List[Dict]
     return raw_matches
 
 
-def fetch_team_schedule(team_id: str, team_name: str) -> Optional[List[Dict]]:
+def fetch_team_schedule(team_id: str, team_name: str) -> Dict[str, Any]:
     """
     从懂球帝抓取球队赛程（结构化结果）。
     """
@@ -103,7 +112,7 @@ def fetch_team_schedule(team_id: str, team_name: str) -> Optional[List[Dict]]:
     cache_hit = _schedule_cache.get(cache_key)
     now = datetime.now()
     if cache_hit and cache_hit["expires_at"] > now:
-        return cache_hit["matches"]
+        return {"ok": True, "matches": cache_hit["matches"]}
 
     url = f"https://www.dongqiudi.com/team/{team_id}.html"
     headers = {
@@ -130,24 +139,37 @@ def fetch_team_schedule(team_id: str, team_name: str) -> Optional[List[Dict]]:
             logger.warning(f"[{team_name}] 网络超时 (尝试 {attempt + 1}/{MAX_RETRIES})")
             if attempt == MAX_RETRIES - 1:
                 logger.error(f"[{team_name}] 最终失败：网络超时")
-                return None
+                return {
+                    "ok": False,
+                    "error_code": "TIMEOUT",
+                    "error_message": ERROR_MESSAGES["TIMEOUT"],
+                }
         except requests.exceptions.RequestException as exc:
             logger.warning(f"[{team_name}] 网络错误: {exc} (尝试 {attempt + 1}/{MAX_RETRIES})")
             if attempt == MAX_RETRIES - 1:
                 logger.error(f"[{team_name}] 最终失败：网络错误")
-                return None
+                error_code = "DNS_RESOLUTION_FAILED" if "Failed to resolve" in str(exc) else "NETWORK_ERROR"
+                return {
+                    "ok": False,
+                    "error_code": error_code,
+                    "error_message": ERROR_MESSAGES[error_code],
+                }
         except Exception as exc:
             logger.error(f"[{team_name}] 未预期错误: {exc}", exc_info=True)
-            return None
+            return {
+                "ok": False,
+                "error_code": "UNEXPECTED_ERROR",
+                "error_message": ERROR_MESSAGES["UNEXPECTED_ERROR"],
+            }
 
     _schedule_cache[cache_key] = {
         "matches": matches,
         "expires_at": datetime.now() + timedelta(seconds=CACHE_TTL_SECONDS),
     }
-    return matches
+    return {"ok": True, "matches": matches}
 
 
-def fetch_team_ics_internal(team_id: str, team_name: str):
+def fetch_team_ics_internal(team_id: str, team_name: str) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
     """
     从懂球帝网站抓取球队赛程，生成 ICS 日历格式
     
@@ -158,9 +180,13 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
     Returns:
         ICS 格式的日历内容，或 None（失败时）
     """
-    matches = fetch_team_schedule(team_id, team_name)
-    if matches is None:
-        return None
+    schedule_result = fetch_team_schedule(team_id, team_name)
+    if not schedule_result["ok"]:
+        return None, {
+            "error_code": schedule_result["error_code"],
+            "error_message": schedule_result["error_message"],
+        }
+    matches = schedule_result["matches"]
 
     ics_content = [
         "BEGIN:VCALENDAR",
@@ -218,7 +244,7 @@ def fetch_team_ics_internal(team_id: str, team_name: str):
         logger.info(f"[{team_name}] 成功添加 {len(matches)} 场比赛到日历")
 
     ics_content.append("END:VCALENDAR")
-    return "\r\n".join(ics_content) + "\r\n"
+    return "\r\n".join(ics_content) + "\r\n", None
 
 @app.get("/api/calendar")
 def get_calendar(
@@ -238,16 +264,26 @@ def get_calendar(
     """
     if not team_id:
         logger.warning("缺少必要参数: team_id")
-        return Response(content="Missing team_id parameter", status_code=400)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "BAD_REQUEST",
+                "message": "Missing team_id parameter",
+            },
+        )
     
     logger.info(f"请求日历: team_id={team_id}, team_name={team_name}")
     
-    ics_data = fetch_team_ics_internal(team_id, team_name)
+    ics_data, error = fetch_team_ics_internal(team_id, team_name)
     if ics_data is None:
         logger.error(f"生成日历失败: team_id={team_id}")
-        return Response(
-            content="Failed to fetch schedule data. Please check team_id and try again.",
-            status_code=500
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "FETCH_FAILED",
+                "error_code": error.get("error_code", "UPSTREAM_UNAVAILABLE"),
+                "message": error.get("error_message", ERROR_MESSAGES["UPSTREAM_UNAVAILABLE"]),
+            },
         )
     
     safe_filename = quote(f"{team_name}.ics")
@@ -273,11 +309,25 @@ def get_preview(
     limit: int = Query(default=5, ge=1, le=20),
 ):
     if not team_id:
-        return Response(content="Missing team_id parameter", status_code=400)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "BAD_REQUEST",
+                "message": "Missing team_id parameter",
+            },
+        )
 
-    matches = fetch_team_schedule(team_id, team_name)
-    if matches is None:
-        return Response(content="Failed to fetch schedule data", status_code=500)
+    schedule_result = fetch_team_schedule(team_id, team_name)
+    if not schedule_result["ok"]:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "FETCH_FAILED",
+                "error_code": schedule_result["error_code"],
+                "message": schedule_result["error_message"],
+            },
+        )
+    matches = schedule_result["matches"]
 
     preview = []
     for item in matches[:limit]:

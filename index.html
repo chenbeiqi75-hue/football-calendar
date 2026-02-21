@@ -45,6 +45,7 @@
                     <span class="text-xs text-blue-600 whitespace-nowrap font-mono">{{ match.date }}</span>
                 </div>
             </div>
+            <div v-else-if="previewError && !isLoading" class="text-center py-4 text-red-500 text-xs">{{ previewError }}</div>
             <div v-else-if="!isLoading" class="text-center py-4 text-gray-400 text-xs italic">该球队暂无近期赛程数据</div>
         </div>
 
@@ -83,6 +84,7 @@
             const selectedLeague = ref('');
             const selectedTeam = ref('');
             const previewMatches = ref([]);
+            const previewError = ref('');
             const isLoading = ref(false);
             const copySuccess = ref(false);
 
@@ -256,20 +258,28 @@
 
             const fetchPreview = async (url) => {
                 isLoading.value = true;
+                previewError.value = '';
                 try {
                     const response = await fetch(url);
-                    if (!response.ok) throw new Error(`preview status: ${response.status}`);
-                    const data = await response.json();
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        const msg = data.message || data.error || `预览接口异常 (${response.status})`;
+                        throw new Error(msg);
+                    }
                     previewMatches.value = (data.matches || []).map((item, idx) => ({
                         summary: item.summary,
                         date: item.date,
                         uid: `${item.start_iso || item.date}-${idx}`
                     }));
-                } catch (e) { console.error("抓取预览失败", e); } finally { isLoading.value = false; }
+                } catch (e) {
+                    console.error("抓取预览失败", e);
+                    previewError.value = e?.message || '抓取赛程失败，请稍后重试';
+                } finally { isLoading.value = false; }
             };
 
             watch(selectedTeam, (newTeam) => {
                 previewMatches.value = [];
+                previewError.value = '';
                 if (newTeam) fetchPreview(previewUrl.value);
             });
 
@@ -292,6 +302,7 @@
                 downloadUrl,
                 copyLink,
                 previewMatches,
+                previewError,
                 isLoading,
                 copySuccess
             }
