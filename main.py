@@ -357,6 +357,14 @@ def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+@app.get("/api/health")
+def api_health_check():
+    """
+    Vercel 下用于前端与运维探活的健康检查端点
+    """
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """
